@@ -1,0 +1,660 @@
+---
+title: "Chronic Disease Analysis & Prediction"
+author: "Ogechi Daniel Koel"
+format: docx
+editor: visual
+---
+
+## Introduction
+
+The aim of this project is to create a model that will best predict whether a person will develop chronic kidney disease based on various factors and biomarkers. But, before creating the model, l will analyze the variables to get a glimpse of how they are distributed in the dataset.
+
+The dataset used in this project is publicly available in Machine Learning repository.
+
+```{r warning= FALSE, message=FALSE}
+library(tidyverse)
+library(corrplot)
+library(ggcorrplot)
+library(caTools)
+library(randomForest)
+library(ggstatsplot)
+library(dlookr)
+library(mice)
+library(ggplot2)
+library(vip)
+library(caret)
+```
+
+```{r message=FALSE, warning=FALSE}
+data <- read_csv("C:/Users/DELL/Documents/Data Science/datasets_1/kidney_disease.csv")
+dim(data)
+#the dataset has 400 rows and 26 columns
+```
+
+```{r}
+#Changing the data into their respective classes
+glimpse(data)
+#all the categorical variables are entered as character except pcv,rc and wc
+data <- data %>% mutate_if(is.character, as.factor)
+#changing the remaining variables to numeric 
+data$rc <- as.numeric(data$rc)
+data$wc <- as.numeric(data$wc)
+data$pcv <- as.numeric(data$pcv)
+#converting sugar level to ordinal
+data$su <- factor(data$su, levels = c(0,1,2,3,4,5),
+                  ordered = TRUE)
+#converting albumin to factor as it is an ordinal
+data$al <- factor(data$al, levels = c(0,1,2,3,4,5),
+                  ordered = TRUE # to maintain the order factor
+)
+data$id <- NULL
+```
+
+```{r}
+#checking for missing values
+sum(duplicated(data))
+#the data has no duplicates
+sum(is.na(data))
+#the data has multiple missing values
+
+#plotting the missing values
+plot_na_pareto(data, only_na = T)
+```
+
+[**DEALING WITH MISSING VALUES**]{.underline}
+
+```{r warning=FALSE, message=FALSE}
+###Imputing the missing values using  mice
+##Initializing the method for imputation
+method <- rep("", ncol(data))
+names(method) <- names(data)
+#identifying numeric variables
+numeric_vars <- names(data)[sapply(data, is.numeric)]
+#identifying categorical variables
+cat_vars <- names(data)[sapply(data, is.factor)]
+#identifying ordered variables
+ord_vars <- names(data)[sapply(data, is.ordered)]
+#assigning pmm for numeric
+method[numeric_vars] <-"pmm"
+#assigning logreg for binary
+method[cat_vars] <- "logreg"
+#assigning polr for ordered variables
+method[ord_vars] <- "polr"
+#imputing with mice
+set.seed(123)
+imputed_data <- mice(data, method = method, m =5, seed = 123)
+#assigning the imputed data
+data <- complete(imputed_data)
+#checking for missing values
+sum(is.na(data))
+```
+
+I decided to use library mice to impute the missing values . I used predictive mean matching(pmm), proportional Odds logistic regression(polr), multinomial logistic regression(polyreg) for imputing missing values in continuous variables, ordered variables and categorical variables respectively.
+
+[**UNIVARIATE ANALYSIS**]{.underline}
+
+```{r}
+#setting the theme 
+theme_set(theme_bw()+
+            theme(title = element_text(face = "bold", colour = "steelblue")))
+glimpse(data)
+#DEMOGRAPHIC VARIABLES
+#1. AGE
+data %>% ggplot(aes(age))+
+  geom_histogram(aes(y = ..density..),
+    fill = "lightblue", colour= "black", bins = 20)+
+  geom_density(color = "red", linewidth =0.8)+
+  labs(title = "Distribution of Age", caption = "koel@2025")
+```
+
+Age is approximately normally distributed.
+
+[CLINICAL MEASUREMENTS]{.underline}
+
+```{r}
+
+#1 Blood Pressure
+data %>% ggplot(aes(bp))+
+  geom_histogram(aes(y=..density..),
+                 fill = "lightblue", colour= "black", bins = 20)+
+  geom_density(color = "red", linewidth = 0.5, alpha =0.5)+
+  labs(title = "Distribution of Blood Pressure", x = "Blood Pressure")
+```
+
+From the above histogram blood pressure has many peaks thus follows a multimodial distribution.
+
+```{r}
+#2. Specific Gravity
+data %>% ggplot(aes(sg))+
+  geom_histogram(aes(y=..density..),
+    fill = "lightblue", colour= "black", bins =5)+
+  geom_density(color ="red", linewidth = 0.5)+
+  labs(title = "Distribution of Urine Specific Gravity", 
+       x = "Specific Gravity")
+```
+
+From the above histogram urine specific gravity has three peaks. This implies that it follows a trimodial distribution.
+
+```{r}
+#3. Albumin levels
+data %>% ggplot(aes(al, fill = al))+
+  geom_bar()+ 
+  labs(title = "Distribution of Albumin levels",
+       x = "Albumin levels",
+       fill = "Albumin levels")
+```
+
+From the project's description, no information was given on how albumin levels were categorized.
+
+```{r}
+#4. Sugar levels
+data %>% ggplot(aes(su, fill = su))+
+  geom_bar()+ 
+  labs(title = "DIstribution of the Blood sugar levels",
+       x = "Sugar levels",
+       fill = "Sugar levels")
+```
+
+From the project's description, no information was given on how sugar levels were categorized
+
+```{r}
+#4. Blood glucose random level
+data %>% ggplot(aes(bgr))+
+  geom_histogram(aes(y=..density..),
+    fill = "lightblue", colour= "black", bins = 15)+
+  geom_density(color ="red", linewidth = 0.5)+
+  labs(title = "Distribution of Blood Glucose random level", 
+       x = "Blood Glucose Random level")
+```
+
+Blood glucose random level, referring to blood sugar measurement taken at any time of the day, is right skewed. Most of the observations had a blood sugar level of around 100 with few having higher levels thus stretching the distribution's tail to the right.
+
+```{r}
+#5 Blood Urea
+data %>% ggplot(aes(bu))+
+  geom_histogram(aes(y=..density..),
+                 fill = "lightblue", colour= "black", bins = 20)+
+  geom_density(color= "red", linewidth =0.5)+
+  labs(title = "Distribution of Blood Urea", x = "Blood Urea")
+```
+
+From the above histogram blood Urea is right skewed.
+
+```{r}
+#6. Serum Creatinine
+data %>% ggplot(aes(sc))+
+  geom_histogram(aes(y=..density..),
+                 fill = "lightblue", colour= "black", bins = 15)+
+  geom_density(color ="red", linewidth = 0.5)+
+  labs(title = "Distribution of blood Serum Creatinine", 
+       x = "Serum Creatinine")
+```
+
+From the above histogram Blood serum creatinine was right skewed
+
+```{r}
+#7. Sodium Levels
+data %>% ggplot(aes(sod))+
+  geom_histogram(aes(y=..density..),
+    fill = "lightblue", colour= "black", bins = 30)+
+  geom_density(color = "red", linewidth =0.5)+
+  labs(title = "Distribution of Sodium Levels", x = "Sodium levels")
+```
+
+From the above histogram, blood sodium levels are left skewed.
+
+```{r}
+#8 Potassium levels
+data %>% ggplot(aes(pot))+
+  geom_histogram(aes(y=..density..),
+    fill = "lightblue", colour= "black", bins = 40)+
+  geom_density(color ="red", linewidth = 0.5)+
+  labs(title = "Distribution of Potassium Levels", x = "Potassium levels")
+```
+
+The above plot shows that potassium levels are right skewed.
+
+```{r}
+#9. Hemoglobin 
+data %>% ggplot(aes(hemo))+
+  geom_histogram(aes(y=..density..),
+    fill = "skyblue", colour= "black", bins = 20)+
+  geom_density(color ="red", linewidth = 0.5)+
+  labs(title = "Distribution of Blood Hemoglobin ", x = "Hemoglobin")
+```
+
+Red blood cell hemoglobin level seems to be roughly normally distributed.
+
+```{r}
+#10. Packed cell volume
+data %>% ggplot(aes(pcv))+
+  geom_histogram(aes(y=..density..),
+    fill = "lightblue", colour= "black", bins = 20)+
+  geom_density(color ="red", linewidth = 0.5)+
+  labs(title = "Distribution of Packed cell volume", 
+       x = "Packed cell Volume")
+```
+
+Packed cell volume seems to be approximately normally distributed.
+
+```{r}
+#11. WHite blood cell count
+data %>% ggplot(aes(wc))+
+  geom_histogram(aes(y=..density..),
+    fill = "lightblue", colour= "black", bins = 20)+
+  geom_density(color ="red", linewidth = 0.5)+
+  labs(title = "Distribution of White Blood cell count", 
+       x = "White  blood cell count")
+```
+
+```{r}
+#12. Red Blood Cell count
+data %>% ggplot(aes(rc))+
+  geom_histogram(aes(y=..density..),
+                 fill = "lightblue", colour= "black", bins = 15)+
+  geom_density(color ="red", linewidth = 0.5)+
+  labs(title = "Distribution of Red Blood Cell Count", 
+       x = "Red blood Cell Count")
+```
+
+Red blood cell count seems to be approximately normally distributed.
+
+[URINE ANALYSIS]{.underline}
+
+```{r}
+#1 Red blood cells
+data %>% ggplot(aes(rbc, fill = rbc))+
+  geom_bar()+ 
+  labs(title = "Distribution of Red Blood cells State",
+       x = "Red Blood cell ",
+       fill = "Red Blood Cell")
+table(data$rbc)
+```
+
+```{r}
+#2. Pus Cells
+data %>% ggplot(aes(pc, fill = pc))+
+  geom_bar()+ 
+  labs(title = "Distribution of Pus cells state ",
+       x = "Pus Cells",
+       fill = "Pus cells")
+```
+
+```{r}
+#2.Pus cells clumps
+data %>% ggplot(aes(pcc, fill = pcc))+
+  geom_bar()+ 
+  labs(title = "Distribution of Pus cells clumps ",
+       x = "Pus Cells clumps",
+       fill = "Pus cells clumps")
+```
+
+```{r}
+#3 Bacteria 
+data %>% ggplot(aes(ba, fill = ba))+
+  geom_bar()+ 
+  labs(title = "Distribution of Bacteria Presence ",
+       x = "Bacteria",
+       fill = "Bacteria")
+```
+
+[SYMPTOMS AND CLINICAL CONDITIONS]{.underline}
+
+```{r}
+#1. Hypertension
+data %>% ggplot(aes(htn, fill = htn))+
+  geom_bar()+ 
+  labs(title = "Distribution of Hypertension prevalence ",
+       x = "Hypertension",
+       fill = "Hypertension")
+```
+
+```{r}
+#2. Diabetes Mellitus
+data %>% ggplot(aes(dm, fill = dm))+
+  geom_bar()+ 
+  labs(title = "Diabetes Mellitus Prevalence ",
+       x = "Diabetes mellitus",
+       fill = "Diabetes Mellitus")
+```
+
+```{r}
+#3. Coronary Artery Disease
+data %>% ggplot(aes(cad, fill = cad))+
+  geom_bar()+ 
+  labs(title = "Caronary Artery Disease Prevalence",
+       x = "Coronary Artery Disease",
+       fill = "Coronary artery")
+```
+
+```{r}
+#4. Appetite 
+data %>% ggplot(aes(appet, fill = appet))+
+  geom_bar()+ 
+  labs(title = "Distribution of Appetite",
+       x = "Appetite",
+       fill = "Appetite")
+```
+
+```{r}
+#5. Pedal Edema 
+data %>% ggplot(aes(pe, fill = pe))+
+  geom_bar()+ 
+  labs(title = "Pedal Edema Prevalence",
+       x = "Pedal Edema",
+       fill = "Pedal Edema")
+```
+
+```{r}
+#6. Anaemia
+data %>% ggplot(aes(ane, fill = ane))+
+  geom_bar()+ 
+  labs(title = "Anemia Prevalence ",
+       x = "Anemia",
+       fill = "Anemia")
+```
+
+```{r}
+#TARGET VARIABLE
+#recoding the target variable
+data$classification <- ifelse(data$classification == "ckd",
+                              "Yes", "No")
+data$classification <- as.factor(data$classification)
+#Kidney disease
+data %>% ggplot(aes(classification, fill = classification))+
+  geom_bar()+ 
+  labs(title = "Kidney Disease Prevalence",
+       x = "Kidney disease",
+       fill = "Kidney Disease")
+```
+
+[**BIVARIATE ANALYSIS**]{.underline}
+
+```{r}
+#Renaming of the variables
+data <- data %>% rename("blood urea" = "bu",
+                        "hypertension" = htn,
+                        diabetes_mellitus = dm,
+                        coronary_heart_disease = cad,
+                        appetite = appet,
+                        pedal_edema = pe,
+                        anemia = ane,
+                        outcome = classification,
+                        red_blood_status =rbc,
+                        pus_cells = pc,
+                        pus_cell_clumps = pcc,
+                        bacteria = ba,
+                        blood_pressure = bp,
+                        specific_gravity = sg,
+                        albumin_levels = al,
+                        sugar_levels = su,
+                        blood_glucose_random = bgr,
+                        blood_urea = bu,
+                        serum_creatinine = sc,
+                        sodium_levels = sod,
+                        potassium_levels =pot,
+                        hemoglobin = hemo,
+                        packed_cell_volume = pcv,
+                        whiteblood_cell_count = wc,
+                        redblood_cell_count = rc
+)
+```
+
+I renamed the variables using rename() from library tidyverse
+
+```{r warning=FALSE, message=FALSE}
+##A. NUMERIC VARIABLES
+##Normalizing 
+normalize <- function(x){
+  return((x-min(x))/(max(x)-min(x)))
+}
+set.seed(123)
+#assigning the numeric variables
+numeric_var <- data %>% select(1:3, 10:18)
+numeric_var <- as.data.frame(lapply(numeric_var, normalize))
+```
+
+From the histograms in Univariate analysis most of the contionous variables were not normally distributed. I'm going to normalize the numeric variables before performing pearson's correlation.
+
+```{r warning=FALSE, message=FALSE}
+cor = round(cor(numeric_var),1)
+ggcorrplot(cor, 
+           title = "correlogram",
+           lab_col = "black", lab = TRUE,
+           legend.title = "Pearson correlation",
+           lab_size = 3, ggtheme = theme_bw, outline.color = "black",
+           colors = c("orange", "green", "blue"))
+```
+
+-Hemoglobin levels had a perfect positive correlation with packed cell volume(0.9)
+
+-Hemoglobin levels had a perfect positive correlation with red blood cell count
+
+-Packed cell volume had a perfect positive correlation with red blood cell count
+
+-Blood urea had a strong negative correlation with red blood cell count
+
+-Blood Sodium levels had a strong negative correlation with serum creatinine(-0.7)
+
+-age and white blood cell count, specific gravity and pottasium levels, random blood glucose and potassium levels, sodium levels and white blood cell count had no correlation(0).
+
+[**CHI- SQUARE TEST FOR INDEPENDENCE BETWEEN CATEGORICAL VARIABLES AND THE OUTCOME VARIABLE.**]{.underline}
+
+```{r}
+ggbarstats(data = data,
+           x= appetite,
+           y = outcome,
+           title = "Chi-Square Test: Appetite vs Outcome")
+
+
+```
+
+A p value of 1.68e-14 shows that there is a statistically significant relationship between appetite and the outcome variable. Cramer's V of 0.39 further implies that there is a moderate association between the two variables.
+
+```{r}
+#Pedal Edema 
+ggbarstats(data = data,
+           x= pedal_edema,
+           y = outcome,
+           title = "Chi-Square Test: Pedal edema vs Outcome")
+
+```
+
+A p value of 2.83e-13 shows that there is a statistically significant relationship between pedal edema and the outcome variable. Cramer's V of 0.36 further implies that there is a moderate association between the two variables.
+
+```{r}
+#Albumin levels
+ggbarstats(data = data,
+           x= albumin_levels,
+           y = outcome,
+           title = "Chi-Square Test: Albumin level vs outcome")
+```
+
+A p value of 3.18e-42 shows that there is a statistically significant relationship between albumin levels and the outcome variable. Cramer's V of 0.17 further implies that there is a weak association between the two variables.
+
+```{r}
+#sugar levels
+ggbarstats(data = data,
+           x= sugar_levels,
+           y = outcome,
+           title = "Chi-Square Test: Sugar levels vs Outcome")
+```
+
+A p value of 7.06e-11 shows that there is a statistically significant relationship between Sugar levels and the outcome variable. Cramer's V of 0.36 further implies that there is a moderate association between the two variables. This suggests that the relationship between the two variables is moderate, but it does not imply causation.
+
+```{r}
+#Pus cell clumps
+ggbarstats(data = data,
+           x= pus_cell_clumps,
+           y = outcome,
+           title = "Chi-Square Test: Pus Cell Clumps vs Outcome")
+```
+
+A p value of 1.12e07 shows that there is a statistically significant relationship between pus cell clumps and the outcome variable. Cramer's V of 0.26 further implies that there is a minimal association between the two variables. This suggests that the relationship between the two variables is minimal, but it does not imply causation.
+
+```{r}
+##Bacteria
+ggbarstats(data = data,
+           x= bacteria,
+           y = outcome,
+           title = "Chi-Square Test: Bacteria state vs Outcome")
+```
+
+A p value of 1.86-04 shows that there is a statistically significant relationship between Bacteria and the outcome variable. Cramer's V of 0.18 further implies that there is a minimal association between the two variables. This suggests that the relationship between these two variables is minimal, but it does not imply causation.
+
+```{r}
+#hypertension
+ggbarstats(data = data,
+           x= hypertension,
+           y = outcome,
+           title = "Chi-Square Test: Hypertension vs Outcome")
+```
+
+A p value of 3.52-e32 shows that there is a statistically significant relationship between appetite and the outcome variable. Cramer's V of 0.59 further implies that there is a strong association between the two variables. This suggests that the relationship between these two variables is strong, but it does not imply causation.
+
+```{r}
+#diabetes mellitus
+ggbarstats(data = data,
+           x= diabetes_mellitus,
+           y = outcome,
+           title = "Chi-Square Test: Diabetes Mellitus vs Outcome")
+```
+
+A p value of 5.04e-29 shows that there is a statistically significant relationship between diabetes mellitus and the outcome variable. Cramer's V of 0.56 further implies that there is a strong association between the two variables. This suggests that the relationship between these two variables is a strong, but it does not imply causation.
+
+```{r}
+#coronary heart disease
+ggbarstats(data = data,
+           x= coronary_heart_disease,
+           y = outcome,
+           title = "Chi-Square Test: Coronary Heart Disease vs Outcome")
+```
+
+A p value of 2.34e-06 shows that there is a statistically significant relationship between coronary heart disease and the outcome variable. Cramer's V of 0.23 further implies that there is a weak association between the two variables. This suggests that the relationship between these two variables is weak, but it does not imply causation.
+
+```{r}
+#anemia
+ggbarstats(data = data,
+           x= anemia,
+           y = outcome,
+           title = "Chi-Square Test: Anemia vs Outcome")
+```
+
+A p value of 7.62e-11 shows that there is a statistically significant relationship between anemia and the outcome variable. Cramer's V of 0.32 further implies that there is a moderate association between the two variables. This suggests that the relationship between these two variables is moderate, but it does not imply causation.
+
+```{r}
+#Red_blood_cell status
+ggbarstats(data = data,
+           x= red_blood_status,
+           y = outcome,
+           title = "Chi-Square Test: Red blood Cell Status vs Outcome")
+```
+
+A p value of 6.04e-30 shows that there is a statistically significant relationship between red blood cell status and the outcome variable. Cramer's V of 0.57 further implies that there is a strong association between the two variables. This suggests that the relationship between these two variables is strong, but it does not imply causation.
+
+```{r}
+#Pus Cell
+ggbarstats(data = data,
+           x= pus_cells,
+           y = outcome,
+           title = "Chi-Square Test: Pus Cells status vs Outcome")
+```
+
+A p value of 2.59e-17 shows that there is a statistically significant relationship between Pus cells and the outcome variable. Cramer's V of 0.42 further implies that there is a moderate association between the two variables. This suggests that the relationship between these two variables is moderate, but it does not imply causation.
+
+[**MACHINE LEARNING**]{.underline}
+
+I decided to use Cross validation to train different models from library caret.
+
+```{r message=FALSE, warning=FALSE}
+class(data$outcome)
+control <-trainControl(method = "cv", number = 10)
+```
+
+I used a 10-fold cross validation for the dataset to be split to 10 folds prior to training and testing.
+
+```{r message=FALSE, warning=FALSE}
+table(data$outcome)
+
+#Random forest
+rf_model <- train(outcome~., data = data, method = "rf",
+                                 trControl = control
+)
+```
+
+```{r warning=FALSE, message=FALSE}
+# logistic regression
+log_model <- train(outcome~., data = data, method = "glm",
+                   family = "binomial",
+                  trControl = control, 
+)
+
+#support vector machines
+svm_model <- train(outcome~., data = data, method = "svmRadial",
+                  trControl = control, 
+)
+#decision tree 
+r_model <- train(outcome~., data = data, method = "rpart",
+                  trControl = control,
+)
+```
+
+I trained random forest, binomial logistic regression, support vector machines, and decision trees respectively.
+
+```{r}
+##Evaluating the models
+results <- resamples(list(random_forest = rf_model,
+                          support_vector = svm_model,
+                          decision_tree = r_model,
+                          logistic = log_model
+                          ))
+summary(results)
+```
+
+From above performance metrics, I decided to use random forest as my best model for the task.
+
+[**RANDOM FOREST MODEL**]{.underline}
+
+```{r warning=FALSE, message=FALSE}
+#Splitting the dataset
+set.seed(123)
+split <- sample.split(data$outcome, SplitRatio = 0.8)
+training <- subset(data, split == TRUE)
+testing <- subset(data, split == FALSE)
+```
+
+I splitted the data into the training set (80%) and the testing set(20%)
+
+```{r}
+#fitting random forest model
+modela <- randomForest(outcome~., data = training,
+                       ntree= 100)
+
+```
+
+```{r}
+#making predictions
+predictions <- predict(modela, testing)
+head(predictions)
+head(testing$outcome)
+tail(predictions)
+tail(testing$outcome)
+```
+
+Above compares the predicted values of the model and their counterparts in the testing dataset.
+
+```{r}
+matrix <- confusionMatrix(table(Actual = testing$outcome,
+                     Predicted = predictions))
+matrix
+```
+
+[Interpretation of No Information Rate and Kappa]{.underline}
+
+**No information rate:** This is the model's accuracy if it always predicted the majority class. In our case the model's overall accuracy (98.75%) is higher than no information Rate of (63.75%). This suggest that our model is better than a trivial model which always predicts the majority class (Yes). A p value of 1.06e-14 further suggests that our overall accuracy is statistically better the the No Information Rate.
+
+**Kappa:** A kappa value of 0.97 shows an there is an almost perfect agreement between the observed and the predicted. Mcnemar's p value of 1 further suggests that the disagreements between the actual values and the predicted values are due to random choice and not by systematic error.
+
+All of the above performance metrics makes our model a better and reliable model.
+
+***THANK YOU!***
